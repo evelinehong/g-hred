@@ -115,11 +115,7 @@ class Seq2Seq(nn.Module):
                 #print (i)
             preds.append(pred)
             lmpreds.append(lmpred)
-            #print ("1")
-        #print ("2") 
-        #final_session_o = self.ses_enc(qu_seq, turnsnumber)
-        #preds, lmpreds = self.dec((final_session_o, u3, u3_lens))
-        
+
         return preds, lmpreds
     
     
@@ -293,27 +289,20 @@ class Decoder(nn.Module):
             ses_inf_vec = self.ses_inf(ses_encoding)
             target_inf_vec = self.emb_inf(target_once)
             
-            #print (dec_hid_vec.size())
-            #print (ses_inf_vec.size())
-            #print (emb_inf_vec.size())
+
             total_hid_o = dec_hid_vec + ses_inf_vec + target_inf_vec
-            #print (total_hid_o.size())
+
             hid_o_mx = max_out(total_hid_o)
-            #print (hid_o_mx.size())        
+      
             hid_o_mx = F.linear(hid_o_mx, self.embed_in.weight) if self.shared_weight else self.embed_out(hid_o_mx)
-            #print (hid_o_mx.size())
-            #print (target_once.size())
+
             l1 = F.linear(ses_encoding, self.W1)
             l2 = F.linear(know_encoding, self.W2)
             l3 = F.linear(hid_o, self.W3)
             l4 = F.linear(target_once, self.W4)
-            #print (l1.size())
-            #print (l2.size())
-            #print (l3.size())
-            #print (l4.size())
+
             gate = torch.sigmoid (l1 + l2 + l3 + l4)
-            #final_score = gate * hid_o_mx
-            #print (final_score.size())
+
             know_score = self.know_vote(know_encoding)
             know_score = know_score[:,:,:-1]
             know_scores = torch.zeros(self.bt_siz, 1, 9).add(math.exp(-100))
@@ -327,10 +316,7 @@ class Decoder(nn.Module):
             final_scores = gate * hid_o_mx + (1-gate) * know_scores
             final_scores = final_scores.squeeze(1)
             final_scores_all[:,i,:] = final_scores
-            #print (final_scores_all.size())
-            #print (know_scores.size())
-            #print (know_scores)
-        #print (final_scores_all)
+
         #if self.train_lm:
         #    siz = target.size(0)
             
