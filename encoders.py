@@ -29,13 +29,13 @@ class Encoder(nn.Module):
                 torch.FloatTensor(embed_dim, self.feat_dim if self.gcn else 2 * self.feat_dim))
         init.xavier_uniform(self.weight)
 
-    def forward(self, adjs, nodes=None):
+    def forward(self, adjs, adjs2 = None, nodes=None):
         """
         Generates embeddings for a batch of nodes.
 
         nodes     -- list of nodes
         """
-        neigh_feats = self.aggregator.forward(adjs, nodes, self.num_sample)
+        neigh_feats = self.aggregator.forward(adjs, adjs2,nodes, self.num_sample)
         if (not self.gcn) and (not nodes is None):
             if self.cuda:
                 self_feats = self.features(torch.LongTensor(nodes).cuda())

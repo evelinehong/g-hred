@@ -114,15 +114,15 @@ def train(options, model):
                 tlm_loss += lm_loss.data[0]
                 lm_loss = lm_loss/target_toks
             optimizer.zero_grad()
-            print ("2")
+            #print ("2")
             loss.backward(retain_graph=True)
-            pritn ("3")
+            #pritn ("3")
             if options.lm:
                 lm_loss.backward()
             clip_gnorm(model)
-            print ("4")
+           
             optimizer.step()
-            print ("5")
+            #print ("5")
             
             
             batch_id += 1
@@ -296,10 +296,12 @@ def calc_valid_loss(data_loader, criteria, model,options):
     model.dec.set_teacher_forcing(True)
     # we want to find the perplexity or likelihood of the provided sequence
     valid_loss, num_words = 0, 0
+    fats = get_features_and_adjancency_and_type()
+
     for i_batch, sample_batch in enumerate(tqdm(data_loader)):
         if i_batch == len(data_loader)-2:
             break 
-        preds, lmpreds = model(sample_batch)
+        preds, lmpreds = model(sample_batch, fats)
         maxlen = sample_batch[3]
         utter_batch = sample_batch[0]
         turnsnumbers = sample_batch[2]
@@ -440,7 +442,7 @@ def main():
     parser.add_argument('-drp', dest='drp', type=float, default=0.3, help='dropout probability used all throughout')
     parser.add_argument('-nl', dest='num_lyr', type=int, default=1, help='number of enc/dec layers(same for both)')
     parser.add_argument('-lr', dest='lr', type=float, default=0.001, help='learning rate for optimizer')
-    parser.add_argument('-bs', dest='bt_siz', type=int, default=25, help='batch size')
+    parser.add_argument('-bs', dest='bt_siz', type=int, default=10, help='batch size')
     parser.add_argument('-bms', dest='beam', type=int, default=5, help='beam size for decoding')
     parser.add_argument('-vsz', dest='vocab_size', type=int, default=41379, help='size of vocabulary')
     parser.add_argument('-esz', dest='emb_size', type=int, default=300, help='embedding size enc/dec same')
