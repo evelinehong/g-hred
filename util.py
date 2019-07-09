@@ -91,7 +91,9 @@ def get_features_and_adjancency_and_type():
         all_entities.append([0] * 100)
         #print(all_entities[8784])
         types = load_dict['rel_embeddings.weight']
-    all_types = {}
+        entities = np.array(all_entities)
+     #   print (entities.shape)
+    all_types = [[0 for i in range(100)] for i in range(entities.shape[0])]
     with open ("build_dictionary_final.txt") as f:
         number = 0
         for line in f:
@@ -102,7 +104,10 @@ def get_features_and_adjancency_and_type():
                 number = entities[1]
                 if int(number) < 1 or int(number) >= 8785:
                     print("wrong2")
+                
                 all_types[int(number)-1] = types[typeall[type1]]
+    types = np.array(all_types)
+    #print (types.shape)
     adj_lists = defaultdict(set)
     with open ("train2id_final.txt") as f:
         for line in f:
@@ -110,6 +115,8 @@ def get_features_and_adjancency_and_type():
             if len(entities) == 3:
                 adj_lists[int(entities[0])].add(int(entities[1]))
                 adj_lists[int(entities[1])].add(int(entities[0]))
+    #types = np.array(all_types)
+    #print (types.shape)
     fats.append(all_entities)
     fats.append(all_types)
     fats.append(adj_lists)
@@ -198,7 +205,7 @@ class MovieTriples(Dataset):
 
 def tensor_to_sent(x, inv_dict, gold = False, greedy=False):
     sents = []
-    inv_dict[39062] = '<pad>'
+    inv_dict[41378] = '<pad>'
     for li in x:
         if not greedy:
             scr = li[1]
@@ -211,7 +218,10 @@ def tensor_to_sent(x, inv_dict, gold = False, greedy=False):
             seq = seq[1:]
         for i in seq:
             i = i.item()
-            sent.append(inv_dict[i])
+            if i in inv_dict:
+                sent.append(inv_dict[i])
+            else:
+                print (i)
             #if i <= 30:
                 #print(i)
                 #print(inv_dict[i])

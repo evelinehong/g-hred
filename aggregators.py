@@ -27,7 +27,7 @@ class MeanAggregator(nn.Module):
         self.cuda = cuda
         self.gcn = gcn
         
-    def forward(self, to_neighs, adjs_2 = None, nodes=None, num_sample=15):
+    def forward(self, to_neighs, nodes=None, num_sample=15):
         """
         nodes --- list of nodes in a batch
         to_neighs --- list of sets, each set is the set of neighbors for node in batch
@@ -39,7 +39,7 @@ class MeanAggregator(nn.Module):
 
         #print (to_neighs)
         _set = set
-        if (not num_sample is None) and (not nodes is None):
+        if not num_sample is None:
             _sample = random.sample
             samp_neighs = [_set(_sample(to_neigh, 
                             num_sample,
@@ -58,15 +58,15 @@ class MeanAggregator(nn.Module):
         column_indices = [unique_nodes[n] for samp_neigh in samp_neighs for n in samp_neigh]   
         row_indices = [i for i in range(len(samp_neighs)) for j in range(len(samp_neighs[i]))]
         mask[row_indices, column_indices] = 1
-        #if self.cuda:
-        #    mask = mask.cuda()
+        if self.cuda:
+            mask = mask.cuda()
         num_neigh = mask.sum(1, keepdim=True)
         mask = mask.div(num_neigh)
         if not nodes is None:
-            #if self.cuda:
-            #    embed_matrix = self.features(torch.LongTensor(unique_nodes_list).cuda())
-            #else:
-            embed_matrix = self.features(torch.LongTensor(unique_nodes_list))
+            if self.cuda:
+                embed_matrix = self.features(torch.LongTensor(unique_nodes_list).cuda())
+            else:
+                embed_matrix = self.features(torch.LongTensor(unique_nodes_list))
         else:
             #adj_adj_lists = []
             #for to_neigh in to_neighs:
@@ -76,14 +76,20 @@ class MeanAggregator(nn.Module):
             #    print(adjs2)
             #    adj_adj_lists.append(adjs2) 
                 
-            
+            adj_adj_lists = [self.adj_lists[int(node)] for node in unique_nodes_list]
+            #print (adj_adj_lists)
+            adj_adj_lists2 = []
+            for adj_adj_list in adj_adj_lists:
+                if not len (adj_adj_list) or adj_adj_list==set():
+                    adj_adj_list = {8784}
+                adj_adj_lists2.append(adj_adj_list)
        
             #print (adj_adj_lists2)
             if self.cuda:
-                embed_matrix = self.features(adjs_2, adjs2=None,nodes=torch.LongTensor(unique_nodes_list).cuda())
+                embed_matrix = self.features(adj_adj_lists2, torch.LongTensor(unique_nodes_list).cuda())
             else:
-                embed_matrix = self.features(adjs_2, adjs2=None,nodes=torch.LongTensor(unique_nodes_list))
-            #embed_matrix = embed_matrix.cuda() 
+                embed_matrix = self.features(adj_adj_lists2, torch.LongTensor(unique_nodes_list))
+            
         to_feats = mask.mm(embed_matrix)
         #print (to_feats)
         return to_feats

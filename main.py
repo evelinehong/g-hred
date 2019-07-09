@@ -9,6 +9,8 @@ import numpy as np
 from modules import *
 from util import *
 from collections import Counter
+from encoders import Encoder
+from aggregators import MeanAggregator
 
 use_cuda = torch.cuda.is_available()
 torch.manual_seed(123)
@@ -55,7 +57,7 @@ def train(options, model):
     print("Training set {} Validation set {}".format(len(train_dataset), len(valid_dataset)))
 
     
-    criteria = nn.CrossEntropyLoss(ignore_index=41378, size_average=False)
+    criteria = nn.NLLLoss(ignore_index=41378, size_average=False)
     if use_cuda:
         criteria.cuda()
     fats = get_features_and_adjancency_and_type() 
@@ -71,6 +73,7 @@ def train(options, model):
             new_tc_ratio = 2100.0/(2100.0 + math.exp(batch_id/2100.0))
             model.dec.set_tc_ratio(new_tc_ratio)
             preds, lmpreds = model(sample_batch,fats)
+            #print (preds)
             maxlen = sample_batch[3]
             utter_batch = sample_batch[0]
             turnsnumbers = sample_batch[2]
@@ -114,15 +117,11 @@ def train(options, model):
                 tlm_loss += lm_loss.data[0]
                 lm_loss = lm_loss/target_toks
             optimizer.zero_grad()
-            #print ("2")
             loss.backward(retain_graph=True)
-            #pritn ("3")
             if options.lm:
                 lm_loss.backward()
             clip_gnorm(model)
-           
             optimizer.step()
-            #print ("5")
             
             
             batch_id += 1
@@ -148,7 +147,7 @@ def load_model_state(mdl, fl):
     mdl.load_state_dict(saved_state)
     
     
-def generate(model, ses_encoding, options):
+def generate(model, ses_encoding, know_encoding, options):
     diversity_rate = 2
     antilm_param = 10
     beam = options.beam
@@ -163,7 +162,7 @@ def generate(model, ses_encoding, options):
             seq, pts_score, pt_score = c[0], c[1], c[2]
             _target = Variable(torch.LongTensor([seq]), volatile=True)
             #_target = seq
-            dec_o, dec_lm = model.dec([ses_encoding, _target, [len(seq)]])
+            dec_o, dec_lm = model.dec([ses_encoding, know_encoding, _target, [len(seq)]])
             dec_o = dec_o[:, :, :-1]
 
             op = F.log_softmax(dec_o, 2, 5)
@@ -239,26 +238,66 @@ def inference_beam(dataloader, model, inv_dict, options):
         print(i_batch)
         qu_seq = torch.ones(1)
         session_outputs = []
+        know_outputs = []
         utter_batch = sample_batch[0]
         maxlen = sample_batch[3]
         turnsnumbers = sample_batch[2]
+        fats = get_features_and_adjancency_and_type() 
         #final_utters = torch.ones
-        
+        num_nodes = 8785
+        feat_data = fats[0]
+        type_data = fats[1]
+        adj_lists = fats[2]
+
+        entity_data = sample_batch[5]
+        features = nn.Embedding(num_nodes,100)
+        features.weight = nn.Parameter(torch.FloatTensor(feat_data), requires_grad = False)        
+
+
+
+        agg1 = MeanAggregator(features, adj_lists, cuda=True)
+        enc1 = Encoder(features, 100, 600, adj_lists, agg1, gcn=True, cuda=False)
+        agg2 = MeanAggregator(lambda adjs,nodes : enc1(adjs,nodes).t(), adj_lists, cuda=True)
+        enc2 = Encoder(lambda adjs,nodes : enc1(adjs,nodes).t(), enc1.embed_dim, 600, adj_lists, agg2, base_model=enc1, gcn=True, cuda=False)
+       
+        graphsage = SupervisedGraphSage(num_nodes, enc2)
+       
         for i in range(0, len(sample_batch[0])):
             utter = sample_batch[0][i]
             utter_lens = sample_batch[1][i]
+            turnentity = entity_data[i]
+            adjs1_origin = turnentity
+            adjs1 = []
+            for adj1 in adjs1_origin:
+                if not len(adj1):
+                    adj1.append(8784)
+                adj1 = set(adj1)
+                adjs1.append(adj1)
+            #print (adjs1)
+            #adjs2 = []
+            #for adj1 in adjs1:
+            #    adj2 = [adj_lists[int(node)] for node in adj1]
+            #    adjs2.append(adj2)
+
+            updated_emb = graphsage(adjs1)
+            updated_emb = torch.add(updated_emb,math.exp(-100))
             if use_cuda:
                 utter = utter.cuda()
             o = model.base_enc((utter,utter_lens))
             if i!=0:
                 qu_seq = torch.cat((qu_seq,o),1)
+                kn_seq = torch.cat((kn_seq,updated_emb),1)
             else:
                 qu_seq = o
+                kn_seq = updated_emb
             #turn = np.array(turnsnumber)
             #turn[turn > i + 1] = i + 1
             #currently we do not need so many turns
             session_o = model.ses_enc(qu_seq)
-            session_outputs.append(session_o)            
+            know_o = model.know_enc(kn_seq)
+            session_outputs.append(session_o)        
+            know_outputs.append(know_o)
+        #print (know_outputs.size())
         #if use_cuda:
         #    u1 = u1.cuda()
         #    u2 = u2.cuda()
@@ -273,7 +312,9 @@ def inference_beam(dataloader, model, inv_dict, options):
             turnsnumber = turnsnumbers[k]
             final_utterance = utter_batch[turnsnumber-1][k]
             final_session_o = session_outputs[turnsnumber-2][k]
-            sent = generate(model, final_session_o.unsqueeze(0), options)
+            final_know_o = know_outputs[turnsnumber-2][k]
+            #print (final_know_o.size())
+            sent = generate(model, final_session_o.unsqueeze(0), final_know_o.unsqueeze(0), options)
             pt = tensor_to_sent(sent, inv_dict, gold = False)
             # greedy true for below because only beam generates a tuple of sequence and probability
             gt = tensor_to_sent(final_utterance.unsqueeze(0).data.cpu().numpy(), inv_dict, gold = True, greedy = True)
@@ -294,14 +335,15 @@ def calc_valid_loss(data_loader, criteria, model,options):
     model.eval()
     cur_tc = model.dec.get_teacher_forcing()
     model.dec.set_teacher_forcing(True)
+    fats = get_features_and_adjancency_and_type()
     # we want to find the perplexity or likelihood of the provided sequence
     valid_loss, num_words = 0, 0
-    fats = get_features_and_adjancency_and_type()
-
     for i_batch, sample_batch in enumerate(tqdm(data_loader)):
         if i_batch == len(data_loader)-2:
             break 
-        preds, lmpreds = model(sample_batch, fats)
+        #options.test = False
+        preds, lmpreds = model(sample_batch,fats)
+        #options.test = True
         maxlen = sample_batch[3]
         utter_batch = sample_batch[0]
         turnsnumbers = sample_batch[2]
@@ -422,7 +464,8 @@ def main():
 
     for x in dict_data:
         tok, f, _, _ = x
-        inv_dict[f] = tok
+        if not f in inv_dict.keys():
+            inv_dict[f] = tok
     #    with open ("dict.txt","a",encoding="utf-8") as f1:
     #        f1.write(str(f)+"\t"+tok+"\n")
     #print("done")
@@ -442,8 +485,8 @@ def main():
     parser.add_argument('-drp', dest='drp', type=float, default=0.3, help='dropout probability used all throughout')
     parser.add_argument('-nl', dest='num_lyr', type=int, default=1, help='number of enc/dec layers(same for both)')
     parser.add_argument('-lr', dest='lr', type=float, default=0.001, help='learning rate for optimizer')
-    parser.add_argument('-bs', dest='bt_siz', type=int, default=10, help='batch size')
-    parser.add_argument('-bms', dest='beam', type=int, default=5, help='beam size for decoding')
+    parser.add_argument('-bs', dest='bt_siz', type=int, default=7, help='batch size')
+    parser.add_argument('-bms', dest='beam', type=int, default=1, help='beam size for decoding')
     parser.add_argument('-vsz', dest='vocab_size', type=int, default=41379, help='size of vocabulary')
     parser.add_argument('-esz', dest='emb_size', type=int, default=300, help='embedding size enc/dec same')
     parser.add_argument('-uthid', dest='ut_hid_size', type=int, default=600, help='encoder utterance hidden state')

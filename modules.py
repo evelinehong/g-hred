@@ -3,6 +3,8 @@ from torch.autograd import Variable
 import torch.nn.functional as F
 use_cuda = torch.cuda.is_available()
 import numpy as np
+np.set_printoptions(threshold=np.inf)
+
 from encoders import Encoder
 from aggregators import MeanAggregator
 from torch.nn import init
@@ -36,24 +38,32 @@ class Seq2Seq(nn.Module):
         self.dec = Decoder(options)
         self.bt_siz = options.bt_siz
         self.ses_hid_size = options.ses_hid_size
-        
+       
     def forward(self, sample_batch,fats):
         #this is about graph
         num_nodes = 8785
         feat_data = fats[0]
         type_data = fats[1]
         adj_lists = fats[2]
-
+        #final_feat_data = torch.cat((feat_data, type_data), 0)
+        #feat = np.array (final_feat_data)
+        #print (feat.shape)
+        feat = np.array(feat_data)
+        type1 = np.array(type_data)
+        feature_data = np.hstack((feat,type1))
+        #print (feature_data.shape)
+        #print (feat.shape)
+        #print (type1.shape)
         entity_data = sample_batch[5]
-        features = nn.Embedding(num_nodes,100, sparse=False)
-        features.weight = nn.Parameter(torch.FloatTensor(feat_data), requires_grad = False)        
+        features = nn.Embedding(num_nodes,200)
+        features.weight = nn.Parameter(torch.FloatTensor(feature_data), requires_grad = False)        
 
 
 
         agg1 = MeanAggregator(features, adj_lists, cuda=True)
-        enc1 = Encoder(features, 100, 600, adj_lists, agg1, gcn=True, cuda=True)
-        agg2 = MeanAggregator(lambda adjs,adjs2,nodes : enc1(adjs,adjs2,nodes).t(), adj_lists, cuda=True)
-        enc2 = Encoder(lambda adjs,adjs2,nodes : enc1(adjs,adjs2,nodes).t(), enc1.embed_dim, 600, adj_lists, agg2, base_model=enc1, gcn=True, cuda=True)
+        enc1 = Encoder(features, 200, 600, adj_lists, agg1, gcn=True, cuda=False)
+        agg2 = MeanAggregator(lambda adjs,nodes : enc1(adjs,nodes).t(), adj_lists, cuda=True)
+        enc2 = Encoder(lambda adjs,nodes : enc1(adjs,nodes).t(), enc1.embed_dim, 600, adj_lists, agg2, base_model=enc1, gcn=True, cuda=False)
        
         graphsage = SupervisedGraphSage(num_nodes, enc2)
 
@@ -79,29 +89,12 @@ class Seq2Seq(nn.Module):
                 adj1 = set(adj1)
                 adjs1.append(adj1)
             #print (adjs1)
-            #adjs2origin = []
+            #adjs2 = []
             #for adj1 in adjs1:
             #    adj2 = [adj_lists[int(node)] for node in adj1]
-            #    adjs2origin.append(adj2)
-            #for adj2 in adjs2origin:
-            #    if not len(adj2):
-            #        adj2.append(8784)
-            #    adj2 = set(adj2)
-            #    adjs2.append(adj2) 
-            #print (adjs2.size())
-            _set = set
-           
-            samp_neighs = adjs1
-            unique_nodes_list = list(set.union(*samp_neighs))
-            adj_adj_lists = [adj_lists[int(node)] for node in unique_nodes_list]
-            #print (adj_adj_lists)
-            adj_adj_lists2 = []
-            for adj_adj_list in adj_adj_lists:
-                if not len (adj_adj_list) or adj_adj_list==set(): 
-                    adj_adj_list = {8784}
-                adj_adj_lists2.append(adj_adj_list)
+            #    adjs2.append(adj2)
 
-            updated_emb = graphsage(adjs1, adj_adj_lists2)
+            updated_emb = graphsage(adjs1)
             updated_emb = torch.add(updated_emb,math.exp(-100))
             if use_cuda:
                 utter = utter.cuda()
@@ -132,11 +125,7 @@ class Seq2Seq(nn.Module):
                 #print (i)
             preds.append(pred)
             lmpreds.append(lmpred)
-            #print ("1")
-        #print ("2") 
-        #final_session_o = self.ses_enc(qu_seq, turnsnumber)
-        #preds, lmpreds = self.dec((final_session_o, u3, u3_lens))
-        
+
         return preds, lmpreds
     
     
@@ -203,13 +192,13 @@ class SupervisedGraphSage(nn.Module):
     def __init__(self, num_classes, enc):
         super(SupervisedGraphSage, self).__init__()
         self.enc = enc
-        #self.xent = nn.CrossEntropyLoss()
+        self.xent = nn.CrossEntropyLoss()
 
-        #self.weight = nn.Parameter(torch.FloatTensor(num_classes, enc.embed_dim))
-        #init.xavier_uniform(self.weight)
+        self.weight = nn.Parameter(torch.FloatTensor(num_classes, enc.embed_dim))
+        init.xavier_uniform(self.weight)
 
-    def forward(self, adjs, adjs2):
-        embeds = self.enc(adjs, adjs2)
+    def forward(self, adjs):
+        embeds = self.enc(adjs)
         embeds = embeds.transpose(0,1)
         embeds = embeds.unsqueeze(1)
         #print (embeds.size())
@@ -253,7 +242,7 @@ class Decoder(nn.Module):
         self.drop = nn.Dropout(options.drp)
         self.tanh = nn.Tanh()
         self.shared_weight = options.shrd_dec_emb
-        
+        self.test = options.test 
         self.embed_in = nn.Embedding(options.vocab_size, self.emb_size, padding_idx=41378, sparse=False)
         if not self.shared_weight:
             self.embed_out = nn.Linear(self.emb_size, options.vocab_size, bias=False)
@@ -268,6 +257,8 @@ class Decoder(nn.Module):
         self.W2 = nn.Parameter(torch.Tensor(options.vocab_size, options.ses_hid_size))
         self.W3 = nn.Parameter(torch.Tensor(options.vocab_size, 2*options.emb_size))
         self.W4 = nn.Parameter(torch.Tensor(options.vocab_size, options.emb_size))
+        self.m1 = nn.LogSoftmax()
+        self.m2 = nn.LogSoftmax()
         #self.weight = nn.Parameter(torch.FloatTensor(8785, enc.embed_dim))
         #init.xavier_uniform(self.weight)
         self.tc_ratio = 1.0
@@ -294,7 +285,7 @@ class Decoder(nn.Module):
         hid_n = init_hidn
         final_scores_all = torch.zeros(self.bt_siz, target_emb.size(1), self.vocab_size)
         for i in range (0,target_emb.size(1)):
-            target_once = target_emb[:,i,::].unsqueeze(1)
+            target_once = target_emb[:,i,:].unsqueeze(1)
             
             hid_o, hid_n = self.rnn(target_once, hid_n)
         #    print (hid_o.size())
@@ -310,44 +301,54 @@ class Decoder(nn.Module):
             ses_inf_vec = self.ses_inf(ses_encoding)
             target_inf_vec = self.emb_inf(target_once)
             
-            #print (dec_hid_vec.size())
-            #print (ses_inf_vec.size())
-            #print (emb_inf_vec.size())
+
             total_hid_o = dec_hid_vec + ses_inf_vec + target_inf_vec
-            #print (total_hid_o.size())
+
             hid_o_mx = max_out(total_hid_o)
-            #print (hid_o_mx.size())        
+      
             hid_o_mx = F.linear(hid_o_mx, self.embed_in.weight) if self.shared_weight else self.embed_out(hid_o_mx)
-            #print (hid_o_mx.size())
-            #print (target_once.size())
+
             l1 = F.linear(ses_encoding, self.W1)
             l2 = F.linear(know_encoding, self.W2)
             l3 = F.linear(hid_o, self.W3)
             l4 = F.linear(target_once, self.W4)
-            #print (l1.size())
-            #print (l2.size())
-            #print (l3.size())
-            #print (l4.size())
+
             gate = torch.sigmoid (l1 + l2 + l3 + l4)
-            #final_score = gate * hid_o_mx
-            #print (final_score.size())
+
             know_score = self.know_vote(know_encoding)
             know_score = know_score[:,:,:-1]
-            know_scores = torch.zeros(self.bt_siz, 1, 9).add(math.exp(-100))
+            #print (know_score.size())
+            
+            know_scores = torch.zeros(know_score.size(0), 1, 10).add(math.exp(-100))
+           
+             
+#print (know_scores.size())
             know_score = know_score.cuda()
             know_scores = know_scores.cuda()
             know_scores = torch.cat((know_scores, know_score), 2)
-            know_scores2 = torch.zeros(self.bt_siz, 1, self.vocab_size-9-8784).add(math.exp(-100))
+            know_scores2 = torch.zeros(know_score.size(0), 1, self.vocab_size-10-8784).add(math.exp(-100))
             know_scores2 = know_scores2.cuda()
             know_scores = know_scores.cuda()
             know_scores = torch.cat((know_scores, know_scores2),2)
-            final_scores = gate * hid_o_mx + (1-gate) * know_scores
+            know_probs = self.m1(know_scores)
+                     
+            know = know_probs.detach().cpu().numpy()
+            #print (know)
+            #print (np.max(know))
+            #print (np.min(know))            
+            
+            #print (np.max(hid))
+            #print (np.min(hid))
+            hid_probs = self.m2(hid_o_mx)
+            hid = hid_probs.detach().cpu().numpy()
+            #print (hid)
+
+            final_scores = gate * hid_probs + (1-gate) * know_probs
             final_scores = final_scores.squeeze(1)
             final_scores_all[:,i,:] = final_scores
-            #print (final_scores_all.size())
-            #print (know_scores.size())
-            #print (know_scores)
-        #print (final_scores_all)
+            final = final_scores_all.cpu().detach().numpy()
+            #print (np.max(final))
+            #print (np.min(final))
         #if self.train_lm:
         #    siz = target.size(0)
             
